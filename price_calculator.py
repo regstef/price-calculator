@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import sqlite3
 import json
 import os
+import shutil
+from datetime import datetime
 
 def get_db_connection():
     conn = sqlite3.connect('outfit_calculator.db')
@@ -35,6 +37,46 @@ def init_db():
     conn.commit()
     conn.close()
 
+def add_default_data():
+    materials_db = load_data('materials')
+    accessories_db = load_data('accessories')
+
+    if materials_db.empty:
+        new_materials = pd.DataFrame({
+            'material': ['Baumwolle', 'Seide', 'Leinen'],
+            'average_price': [10, 30, 20],
+            'waste_percentage': [10, 15, 12]
+        })
+        add_new_data(new_materials, 'materials')
+
+    if accessories_db.empty:
+        new_accessories = pd.DataFrame({
+            'accessory': ['Knöpfe', 'Reißverschluss', 'Gürtel'],
+            'price': [0.5, 2, 5]
+        })
+        add_new_data(new_accessories, 'accessories')
+
+def add_new_data(new_data, table_name):
+    conn = get_db_connection()
+    existing_data = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+    
+    if table_name == 'materials':
+        new_entries = new_data[~new_data['material'].isin(existing_data['material'])]
+    elif table_name == 'accessories':
+        new_entries = new_data[~new_data['accessory'].isin(existing_data['accessory'])]
+    
+    if not new_entries.empty:
+        new_entries.to_sql(table_name, conn, if_exists='append', index=False)
+    
+    conn.close()
+    return not new_entries.empty
+
+def backup_database():
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f'outfit_calculator_backup_{current_time}.db'
+    shutil.copy2('outfit_calculator.db', backup_filename)
+    st.success(f'Datenbank-Backup erstellt: {backup_filename}')
+
 def update_db_structure():
     conn = get_db_connection()
     c = conn.cursor()
@@ -59,10 +101,11 @@ def load_data(table_name):
     return df
 
 def save_data(data, table_name):
-    conn = get_db_connection()
-    data.to_sql(table_name, conn, if_exists='replace', index=False)
-    conn.close()
-    st.success(f'Daten in {table_name} gespeichert!')
+    new_entries_added = add_new_data(data, table_name)
+    if new_entries_added:
+        st.success(f'Neue Einträge zu {table_name} hinzugefügt!')
+    else:
+        st.info(f'Keine neuen Einträge für {table_name} gefunden. Daten sind bereits aktuell.')
 
 def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, total_cost):
     conn = get_db_connection()
@@ -223,6 +266,7 @@ def create_pie_chart(costs, labels):
         st.write("Labels:", positive_labels)
 
 init_db()
+add_default_data()
 
 materials_db = load_data('materials')
 accessories_db = load_data('accessories')
@@ -483,6 +527,9 @@ with tab5:
 
     Bei Fragen oder Problemen wenden Sie sich bitte an den Support.
     """)
+
+    if st.button('Datenbank-Backup erstellen'):
+        backup_database()
 
 if __name__ == "__main__":
     update_db_structure()

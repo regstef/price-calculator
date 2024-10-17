@@ -37,46 +37,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-def add_default_data():
-    materials_db = load_data('materials')
-    accessories_db = load_data('accessories')
-
-    if materials_db.empty:
-        new_materials = pd.DataFrame({
-            'material': ['Baumwolle', 'Seide', 'Leinen'],
-            'average_price': [10, 30, 20],
-            'waste_percentage': [10, 15, 12]
-        })
-        add_new_data(new_materials, 'materials')
-
-    if accessories_db.empty:
-        new_accessories = pd.DataFrame({
-            'accessory': ['Knöpfe', 'Reißverschluss', 'Gürtel'],
-            'price': [0.5, 2, 5]
-        })
-        add_new_data(new_accessories, 'accessories')
-
-def add_new_data(new_data, table_name):
-    conn = get_db_connection()
-    existing_data = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-    
-    if table_name == 'materials':
-        new_entries = new_data[~new_data['material'].isin(existing_data['material'])]
-    elif table_name == 'accessories':
-        new_entries = new_data[~new_data['accessory'].isin(existing_data['accessory'])]
-    
-    if not new_entries.empty:
-        new_entries.to_sql(table_name, conn, if_exists='append', index=False)
-    
-    conn.close()
-    return not new_entries.empty
-
-def backup_database():
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_filename = f'outfit_calculator_backup_{current_time}.db'
-    shutil.copy2('outfit_calculator.db', backup_filename)
-    st.success(f'Datenbank-Backup erstellt: {backup_filename}')
-
 def update_db_structure():
     conn = get_db_connection()
     c = conn.cursor()
@@ -92,20 +52,24 @@ def update_db_structure():
     conn.commit()
     conn.close()
 
-update_db_structure()
-
 def load_data(table_name):
     conn = get_db_connection()
     df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
     conn.close()
     return df
 
+def update_data(data, table_name):
+    conn = get_db_connection()
+    data.to_sql(table_name, conn, if_exists='replace', index=False)
+    conn.close()
+    return True
+
 def save_data(data, table_name):
-    new_entries_added = add_new_data(data, table_name)
-    if new_entries_added:
-        st.success(f'Neue Einträge zu {table_name} hinzugefügt!')
+    updated = update_data(data, table_name)
+    if updated:
+        st.success(f'Daten in {table_name} aktualisiert!')
     else:
-        st.info(f'Keine neuen Einträge für {table_name} gefunden. Daten sind bereits aktuell.')
+        st.error(f'Fehler beim Aktualisieren der Daten in {table_name}.')
 
 def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, total_cost):
     conn = get_db_connection()
@@ -129,6 +93,10 @@ def format_currency(value):
     return f"{value:.2f} €"
 
 def create_cost_overview(components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin):
+    if not components:
+        st.warning("Keine Komponenten ausgewählt. Bitte wählen Sie mindestens eine Komponente aus.")
+        return [], 0, 0, 0, 0, 0, 0
+
     cost_data = []
     total_material_cost = 0
     total_accessory_cost = 0
@@ -142,9 +110,12 @@ def create_cost_overview(components, component_costs, materials_db, accessories_
                 cost = data.get('cost', 0)
             else:
                 amount = data
-                material_data = materials_db[materials_db['material'] == material].iloc[0]
-                material_price = float(material_data['average_price'])
-                material_waste = float(material_data['waste_percentage']) / 100
+                material_data = materials_db[materials_db['material'] == material]
+                if material_data.empty:
+                    st.warning(f"Material '{material}' nicht in der Datenbank gefunden. Bitte überprüfen Sie die Materialien.")
+                    continue
+                material_price = float(material_data['average_price'].iloc[0])
+                material_waste = float(material_data['waste_percentage'].iloc[0]) / 100
                 cost = amount * material_price * (1 + material_waste)
             
             total_material_cost += cost
@@ -171,8 +142,11 @@ def create_cost_overview(components, component_costs, materials_db, accessories_
                 cost = data.get('cost', 0)
             else:
                 amount = data
-                accessory_data = accessories_db[accessories_db['accessory'] == accessory].iloc[0]
-                accessory_price = float(accessory_data['price'])
+                accessory_data = accessories_db[accessories_db['accessory'] == accessory]
+                if accessory_data.empty:
+                    st.warning(f"Zubehör '{accessory}' nicht in der Datenbank gefunden. Bitte überprüfen Sie das Zubehör.")
+                    continue
+                accessory_price = float(accessory_data['price'].iloc[0])
                 cost = amount * accessory_price
             
             total_accessory_cost += cost
@@ -234,7 +208,6 @@ def create_cost_overview(components, component_costs, materials_db, accessories_
     return cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price
 
 def create_pie_chart(costs, labels):
-    # Entfernen Sie negative Werte und ihre entsprechenden Labels
     positive_costs = [cost for cost in costs if cost > 0]
     positive_labels = [label for cost, label in zip(costs, labels) if cost > 0]
     
@@ -250,7 +223,6 @@ def create_pie_chart(costs, labels):
                                         startangle=90,
                                         pctdistance=0.85)
         
-        # Fügen Sie eine Legende hinzu
         ax.legend(wedges, positive_labels,
                 title="Kostenarten",
                 loc="center left",
@@ -265,26 +237,62 @@ def create_pie_chart(costs, labels):
         st.write("Kostendaten:", positive_costs)
         st.write("Labels:", positive_labels)
 
+def backup_database():
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f'outfit_calculator_backup_{current_time}.db'
+    shutil.copy2('outfit_calculator.db', backup_filename)
+    st.success(f'Datenbank-Backup erstellt: {backup_filename}')
+
+def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db):
+    saved_outfits = load_data('saved_outfits')
+    if saved_outfits.empty:
+        st.write("Keine Outfits gespeichert.")
+    else:
+        for index, outfit in saved_outfits.iterrows():
+            with st.expander(f"{outfit['name']} (ID: {outfit['id']})"):
+                try:
+                    components = json.loads(outfit['components'])
+                    materials = json.loads(outfit['materials'])
+                    accessories = json.loads(outfit['accessories'])
+                    work_hours = json.loads(outfit['work_hours'])
+                    
+                    component_costs = {
+                        component: {
+                            'Materialien': materials.get(component, {}),
+                            'Zubehör': accessories.get(component, {}),
+                            'Arbeitskosten': work_hours.get(component, 0) * current_hourly_rate
+                        } for component in components
+                    }
+                    
+                    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(
+                        components, component_costs, current_materials_db, current_accessories_db,
+                        current_hourly_rate, current_overhead_costs, outfit['hourly_rate'] * 2,
+                        20  # Standardmäßige Gewinnmarge von 20%
+                    )
+                    
+                    if cost_data:
+                        df = pd.DataFrame(cost_data)
+                        st.table(df)
+                        
+                        costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, outfit['hourly_rate'] * 2]
+                        labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
+                        create_pie_chart(costs, labels)
+                    else:
+                        st.warning("Keine Kostendaten für dieses Outfit verfügbar.")
+                    
+                except Exception as e:
+                    st.error(f"Fehler beim Laden des Outfits: {str(e)}")
+                
+                if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
+                    delete_outfit(outfit['id'])
+                    st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
+
+# Hauptprogramm
 init_db()
-add_default_data()
+update_db_structure()
 
 materials_db = load_data('materials')
 accessories_db = load_data('accessories')
-
-if materials_db.empty:
-    materials_db = pd.DataFrame({
-        'material': ['Baumwolle', 'Seide', 'Leinen'],
-        'average_price': [10, 30, 20],
-        'waste_percentage': [10, 15, 12]
-    })
-    save_data(materials_db, 'materials')
-
-if accessories_db.empty:
-    accessories_db = pd.DataFrame({
-        'accessory': ['Knöpfe', 'Reißverschluss', 'Gürtel'],
-        'price': [0.5, 2, 5]
-    })
-    save_data(accessories_db, 'accessories')
 
 st.title('Outfit-Preis-Kalkulator')
 
@@ -451,50 +459,6 @@ with tab3:
 
 with tab4:
     st.subheader('Gespeicherte Outfits')
-    
-    def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db):
-        saved_outfits = load_data('saved_outfits')
-        if saved_outfits.empty:
-            st.write("Keine Outfits gespeichert.")
-        else:
-            for index, outfit in saved_outfits.iterrows():
-                with st.expander(f"{outfit['name']} (ID: {outfit['id']})"):
-                    components = json.loads(outfit['components'])
-                    materials = json.loads(outfit['materials'])
-                    accessories = json.loads(outfit['accessories'])
-                    work_hours = json.loads(outfit['work_hours'])
-                    
-                    # Rekonstruktion der component_costs Struktur
-                    component_costs = {
-                        component: {
-                            'Materialien': materials[component],
-                            'Zubehör': accessories[component],
-                            'Arbeitskosten': work_hours[component] * current_hourly_rate
-                        } for component in components
-                    }
-                    
-                    # Verwendung der create_cost_overview Funktion
-                    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(
-                        components, component_costs, current_materials_db, current_accessories_db,
-                        current_hourly_rate, current_overhead_costs, outfit['hourly_rate'] * 2,  # Annahme: 2 Beratungsstunden
-                        20  # Standardmäßige Gewinnmarge von 20%
-                    )
-                    
-                    # Anzeigen der Tabelle
-                    df = pd.DataFrame(cost_data)
-                    st.table(df)
-                    
-                    # Kuchendiagramm
-                    costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, outfit['hourly_rate'] * 2]
-                    labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
-                    create_pie_chart(costs, labels)
-                    
-                    # Löschen-Button
-                    if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
-                        delete_outfit(outfit['id'])
-                        st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
-
-    # Aufruf der Funktion
     display_saved_outfits(hourly_rate, overhead_costs, materials_db, accessories_db)
 
 with tab5:
@@ -532,4 +496,4 @@ with tab5:
         backup_database()
 
 if __name__ == "__main__":
-    update_db_structure()
+    update_db_structure() 

@@ -188,7 +188,39 @@ def create_cost_overview(components, component_costs, materials_db, accessories_
         {'Kategorie': 'Gesamtübersicht', 'Komponente': '-', 'Beschreibung': 'Empfohlener Verkaufspreis', 'Betrag (€)': format_currency(final_price)}
     ])
 
-    return cost_data, [total_material_cost, total_accessory_cost, total_labor_cost, overhead_costs, consultation_costs]
+    return cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price
+
+def create_pie_chart(costs, labels):
+    # Entfernen Sie negative Werte und ihre entsprechenden Labels
+    positive_costs = [cost for cost in costs if cost > 0]
+    positive_labels = [label for cost, label in zip(costs, labels) if cost > 0]
+    
+    if not positive_costs:
+        st.warning("Keine positiven Kosten vorhanden. Kuchendiagramm kann nicht erstellt werden.")
+        return
+    
+    fig, ax = plt.subplots()
+    try:
+        wedges, texts, autotexts = ax.pie(positive_costs, 
+                                        labels=positive_labels, 
+                                        autopct=lambda pct: f'{pct:.1f}%' if pct > 5 else '',
+                                        startangle=90,
+                                        pctdistance=0.85)
+        
+        # Fügen Sie eine Legende hinzu
+        ax.legend(wedges, positive_labels,
+                title="Kostenarten",
+                loc="center left",
+                bbox_to_anchor=(1, 0, 0.5, 1))
+        
+        plt.setp(autotexts, size=8, weight="bold")
+        ax.set_title("Kostenverteilung")
+        
+        st.pyplot(fig)
+    except Exception as e:
+        st.error(f"Fehler bei der Erstellung des Kuchendiagramms: {str(e)}")
+        st.write("Kostendaten:", positive_costs)
+        st.write("Labels:", positive_labels)
 
 init_db()
 
@@ -326,18 +358,16 @@ with tab1:
 
     st.divider()
     st.subheader('Gesamtübersicht')
-    cost_data, costs = create_cost_overview(components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin)
+    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin)
 
     # Erstellen und Anzeigen der Tabelle
     df = pd.DataFrame(cost_data)
     st.table(df)
 
     # Kuchendiagramm
-    fig, ax = plt.subplots()
+    costs = [total_material_cost, total_accessory_cost, total_labor_cost, overhead_costs, consultation_costs]
     labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
-    ax.pie(costs, labels=labels, autopct='%1.1f%%', startangle=90)
-    ax.axis('equal')
-    st.pyplot(fig)
+    create_pie_chart(costs, labels)
 
     st.divider()
     # Outfit speichern
@@ -400,7 +430,7 @@ with tab4:
                     }
                     
                     # Verwendung der create_cost_overview Funktion
-                    cost_data, costs = create_cost_overview(
+                    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(
                         components, component_costs, current_materials_db, current_accessories_db,
                         current_hourly_rate, current_overhead_costs, outfit['hourly_rate'] * 2,  # Annahme: 2 Beratungsstunden
                         20  # Standardmäßige Gewinnmarge von 20%
@@ -410,19 +440,10 @@ with tab4:
                     df = pd.DataFrame(cost_data)
                     st.table(df)
                     
-                    # Überprüfen und Behandeln von NaN-Werten
-                    costs = [0 if pd.isna(cost) else cost for cost in costs]
-                    
-                    # Nur das Kuchendiagramm erstellen, wenn wir gültige Daten haben
-                    if sum(costs) > 0:
-                        # Kuchendiagramm
-                        fig, ax = plt.subplots()
-                        labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
-                        ax.pie(costs, labels=labels, autopct='%1.1f%%', startangle=90)
-                        ax.axis('equal')
-                        st.pyplot(fig)
-                    else:
-                        st.warning("Nicht genügend Daten für ein Kuchendiagramm vorhanden.")
+                    # Kuchendiagramm
+                    costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, outfit['hourly_rate'] * 2]
+                    labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
+                    create_pie_chart(costs, labels)
                     
                     # Löschen-Button
                     if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):

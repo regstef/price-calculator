@@ -330,13 +330,13 @@ with tab1:
                             st.markdown(f'<div style="text-align: right;">{material_cost:.2f} €</div>', unsafe_allow_html=True)
                     with col4:
                         if st.button('X', key=f'{component}_remove_material_{i}'):
-                            del st.session_state[f'{component}_material_{i}']
-                            del st.session_state[f'{component}_material_amount_{i}']
-                            st.session_state[f'{component}_material_count'] = material_count - 1
-                            st.experimental_rerun()
+                            if f'{component}_material_{i}' in st.session_state:
+                                del st.session_state[f'{component}_material_{i}']
+                            if f'{component}_material_amount_{i}' in st.session_state:
+                                del st.session_state[f'{component}_material_amount_{i}']
+                            st.session_state[f'{component}_material_count'] = max(1, material_count - 1)
                 if st.button('Material hinzufügen', key=f'{component}_add_material'):
                     st.session_state[f'{component}_material_count'] = material_count + 1
-                    st.experimental_rerun()
 
             with accessory_tab:
                 accessory_count = st.session_state.get(f'{component}_accessory_count', 1)
@@ -356,13 +356,13 @@ with tab1:
                             st.markdown(f'<div style="text-align: right;">{accessory_cost:.2f} €</div>', unsafe_allow_html=True)
                     with col4:
                         if st.button('X', key=f'{component}_remove_accessory_{i}'):
-                            del st.session_state[f'{component}_accessory_{i}']
-                            del st.session_state[f'{component}_accessory_amount_{i}']
-                            st.session_state[f'{component}_accessory_count'] = accessory_count - 1
-                            st.experimental_rerun()
+                            if f'{component}_accessory_{i}' in st.session_state:
+                                del st.session_state[f'{component}_accessory_{i}']
+                            if f'{component}_accessory_amount_{i}' in st.session_state:
+                                del st.session_state[f'{component}_accessory_amount_{i}']
+                            st.session_state[f'{component}_accessory_count'] = max(1, accessory_count - 1)
                 if st.button('Zubehör hinzufügen', key=f'{component}_add_accessory'):
                     st.session_state[f'{component}_accessory_count'] = accessory_count + 1
-                    st.experimental_rerun()
 
             with cost_breakdown_tab:
                 st.subheader('Kostenaufschlüsselung')

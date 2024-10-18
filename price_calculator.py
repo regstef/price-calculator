@@ -36,7 +36,7 @@ def save_data(data, table_name):
     else:
         st.error(f'Fehler beim Aktualisieren der Daten in {table_name}.')
 
-def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, total_cost):
+def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, total_cost, profit_margin):
     supabase.table('saved_outfits').insert({
         'name': name,
         'components': json.dumps(components),
@@ -45,7 +45,8 @@ def save_outfit(name, components, materials, accessories, work_hours, hourly_rat
         'work_hours': json.dumps(work_hours),
         'hourly_rate': hourly_rate,
         'overhead_costs': overhead_costs,
-        'total_cost': total_cost
+        'total_cost': total_cost,
+        'profit_margin': profit_margin
     }).execute()
 
 def delete_outfit(id):
@@ -203,7 +204,7 @@ def backup_database():
     shutil.copy2('outfit_calculator.db', backup_filename)
     st.success(f'Datenbank-Backup erstellt: {backup_filename}')
 
-def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db):
+def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db, current_profit_margin):
     saved_outfits = load_data('saved_outfits')
     if saved_outfits.empty:
         st.write("Keine Outfits gespeichert.")
@@ -227,7 +228,7 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                     cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(
                         components, component_costs, current_materials_db, current_accessories_db,
                         current_hourly_rate, current_overhead_costs, outfit['hourly_rate'] * 2,
-                        20
+                        current_profit_margin
                     )
                     
                     if cost_data:
@@ -410,7 +411,7 @@ with tab1:
                     {c: outfit_components[c]['materials'] for c in components},
                     {c: outfit_components[c]['accessories'] for c in components},
                     {c: outfit_components[c]['work_hours'] for c in components},
-                    hourly_rate, overhead_costs, total_cost)
+                    hourly_rate, overhead_costs, total_cost, profit_margin)
         st.success(f'Outfit "{outfit_name}" erfolgreich gespeichert!')
 
 with tab2:
@@ -471,7 +472,7 @@ with tab3:
 
 with tab4:
     st.subheader('Gespeicherte Outfits')
-    display_saved_outfits(hourly_rate, overhead_costs, materials_db, accessories_db)
+    display_saved_outfits(hourly_rate, overhead_costs, materials_db, accessories_db, profit_margin)
 
 with tab5:
     st.subheader('Hilfe')

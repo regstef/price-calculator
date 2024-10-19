@@ -38,7 +38,7 @@ def save_data(data, table_name):
     else:
         st.error(f'Fehler beim Aktualisieren der Daten in {table_name}.')
 
-def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price):
+def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price, category):
     supabase.table('saved_outfits').insert({
         'name': name,
         'components': json.dumps(components),
@@ -54,10 +54,11 @@ def save_outfit(name, components, materials, accessories, work_hours, hourly_rat
         'total_cost': total_cost,
         'profit_margin': profit_margin,
         'profit_amount': profit_amount,
-        'final_price': final_price
+        'final_price': final_price,
+        'category': category
     }).execute()
 
-def update_outfit(outfit_id, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price):
+def update_outfit(outfit_id, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price, category):
     supabase.table('saved_outfits').update({
         'components': json.dumps(components),
         'materials': json.dumps(materials),
@@ -72,7 +73,8 @@ def update_outfit(outfit_id, components, materials, accessories, work_hours, hou
         'total_cost': total_cost,
         'profit_margin': profit_margin,
         'profit_amount': profit_amount,
-        'final_price': final_price
+        'final_price': final_price,
+        'category': category
     }).eq('id', outfit_id).execute()
 
 def delete_outfit(id):
@@ -304,6 +306,14 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                     accessories = json.loads(outfit['accessories'])
                     work_hours = json.loads(outfit['work_hours'])
                     
+                    # Kategorieauswahl mit einem eindeutigen Schlüssel
+                    category = st.selectbox(
+                        'Kategorie',
+                        ['Basics', 'Made-to-Order'],
+                        index=['Basics', 'Made-to-Order'].index(outfit.get('category', 'Basics')),
+                        key=f"category_{outfit['id']}"
+                    )
+                    
                     # Berechne die Kosten
                     total_material_cost = sum(sum(item['cost'] for item in component.values()) for component in materials.values())
                     total_accessory_cost = sum(sum(item['cost'] for item in component.values()) for component in accessories.values())
@@ -359,7 +369,7 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                         update_outfit(outfit['id'], components, materials, accessories, work_hours,
                                       current_hourly_rate, current_overhead_costs, consultation_costs,
                                       total_material_cost, total_accessory_cost, total_labor_cost,
-                                      total_cost, current_profit_margin, profit_amount, final_price)
+                                      total_cost, current_profit_margin, profit_amount, final_price, category)
                         st.success(f"Outfit '{outfit['name']}' wurde aktualisiert.")
 
                 except Exception as e:
@@ -368,6 +378,7 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                 if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
                     delete_outfit(outfit['id'])
                     st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
+
 
 
 def add_material(material_name, average_price, waste_percentage):
@@ -522,6 +533,8 @@ with tab1:
     st.divider()
     st.subheader("Outfit speichern")
     outfit_name = st.text_input('Outfit-Name')
+    category = st.selectbox('Kategorie', ['Basics', 'Made-to-Order'])
+
     if st.button('Outfit speichern') and outfit_name:
         outfit_components = {component: {
             'materials': {m: {'amount': amount, 'cost': materials_db[materials_db['material'] == m]['average_price'].iloc[0] * amount * (1 + materials_db[materials_db['material'] == m]['waste_percentage'].iloc[0] / 100)} for m, amount in component_costs[component]['Materialien'].items()},
@@ -535,7 +548,7 @@ with tab1:
                     {c: outfit_components[c]['work_hours'] for c in components},
                     hourly_rate, overhead_costs, consultation_costs,
                     total_material_cost, total_accessory_cost, total_labor_cost,
-                    total_cost, profit_margin, profit_amount, final_price)
+                    total_cost, profit_margin, profit_amount, final_price, category)
         st.success(f'Outfit "{outfit_name}" erfolgreich gespeichert!')
 
 with tab2:

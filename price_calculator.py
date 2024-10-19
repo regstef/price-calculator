@@ -13,6 +13,8 @@ import numpy as np
 import time
 import logging
 from typing import Dict, List, Tuple, Optional, Any
+from json import JSONEncoder
+
 
 # Konstanten
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qormgjgpisbzyegipbiq.supabase.co")
@@ -226,6 +228,32 @@ class UIManager:
             st.write("Kostendaten:", positive_costs)
             st.write("Labels:", positive_labels)
 
+class NumpyEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.int64, np.int32)):
+            return int(obj)
+        return super(NumpyEncoder, self).default(obj)
+
+def convert_numpy_types(obj):
+    if isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(v) for v in obj]
+    elif isinstance(obj, (np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 class OutfitCalculator:
     """Klasse zur Berechnung der Outfit-Kosten."""
 
@@ -430,13 +458,10 @@ def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManag
                                        current_materials_db, current_accessories_db, current_profit_margin, 
                                        consultation_hours)
             
-            if st.button(f"Outfit '{selected_outfit}' bearbeiten"):
-                st.session_state.editing_outfit = outfit
-                st.rerun()
-
-        if 'editing_outfit' in st.session_state:
-            edit_outfit(supabase_manager, st.session_state.editing_outfit, current_materials_db, current_accessories_db, 
-                        current_hourly_rate, current_overhead_costs, current_profit_margin, consultation_hours)
+            # Hier fügen wir den Aufruf der edit_outfit Funktion hinzu
+            if 'editing_outfit' in st.session_state:
+                edit_outfit(supabase_manager, st.session_state.editing_outfit, current_materials_db, current_accessories_db, 
+                            current_hourly_rate, current_overhead_costs, current_profit_margin, consultation_hours)
 
         st.write("---")
         col1, col2 = st.columns(2)
@@ -450,6 +475,7 @@ def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManag
         with col2:
             if st.button('CSV erstellen'):
                 generate_csv_download(saved_outfits)
+
 
 
 def calculate_updated_price(outfit: pd.Series, current_hourly_rate: float, current_overhead_costs: float, 
@@ -620,6 +646,11 @@ def display_outfit_details(supabase_manager: SupabaseManager, outfit: pd.Series,
             unsafe_allow_html=True
         )
 
+        # Fügen Sie diesen Block vor oder nach dem "Outfit löschen" Button hinzu
+        if st.button(f"Outfit '{outfit['name']}' bearbeiten", key=f"edit_{outfit['id']}"):
+            st.session_state.editing_outfit = outfit
+            st.rerun()
+
         if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
             delete_outfit(supabase_manager, outfit['id'])
             st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
@@ -629,6 +660,144 @@ def display_outfit_details(supabase_manager: SupabaseManager, outfit: pd.Series,
         logger.error(f"Fehler beim Laden des Outfits: {e}")
         st.error(f"Fehler beim Laden des Outfits: {e}")
         st.error(f"Problematische Daten: {outfit}")
+
+import numpy as np
+from json import JSONEncoder
+
+class NumpyEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return JSONEncoder.default(self, obj)
+
+def edit_outfit(supabase_manager: SupabaseManager, outfit: pd.Series, materials_db: pd.DataFrame, accessories_db: pd.DataFrame, hourly_rate: float, overhead_costs: float, profit_margin: float, consultation_hours: float):
+    st.header(f"Outfit '{outfit['name']}' bearbeiten")
+
+    components = json.loads(outfit['components'])
+    materials = json.loads(outfit['materials'])
+    accessories = json.loads(outfit['accessories'])
+    work_hours = json.loads(outfit['work_hours'])
+
+    new_name = st.text_input("Outfit-Name", value=outfit['name'], key=f"edit_name_{outfit['id']}")
+    new_category = st.selectbox("Kategorie", ['Basics', 'Made-to-Order'], 
+                                index=['Basics', 'Made-to-Order'].index(outfit['category']),
+                                key=f"edit_category_{outfit['id']}")
+
+    component_costs = {component: {'Materialien': {}, 'Zubehör': {}, 'Arbeitskosten': 0} for component in components}
+
+    # Laden Sie die bestehenden Daten in component_costs
+    for component in components:
+        component_costs[component]['Materialien'] = materials.get(component, {})
+        component_costs[component]['Zubehör'] = accessories.get(component, {})
+        component_costs[component]['Arbeitskosten'] = work_hours.get(component, 0) * hourly_rate
+
+    selected_components = st.multiselect("Komponenten", ALL_POSSIBLE_COMPONENTS, default=components, key=f"edit_components_{outfit['id']}")
+
+    for component in selected_components:
+        with st.expander(f'{component} Details', expanded=True):
+            # Arbeitszeit-Eingabe für jede Komponente
+            work_hours_value = work_hours.get(component, 0)
+            new_work_hours = st.number_input(f'Arbeitsstunden für {component}', min_value=0.0, 
+                                             value=float(work_hours_value), 
+                                             step=0.5, key=f'{outfit["id"]}_{component}_work_hours')
+            component_costs[component]['Arbeitskosten'] = new_work_hours * hourly_rate
+            
+            material_tab, accessory_tab = st.tabs(["Materialien", "Zubehör"])
+            
+            with material_tab:
+                material_count = st.session_state.get(f'{outfit["id"]}_{component}_material_count', len(component_costs[component]['Materialien']))
+                new_materials = {}
+                for i in range(material_count):
+                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                    with col1:
+                        material = st.selectbox('Material', options=[''] + materials_db['material'].tolist(), 
+                                                key=f'{outfit["id"]}_{component}_material_{i}',
+                                                index=0 if i >= len(component_costs[component]['Materialien']) else 
+                                                     materials_db['material'].tolist().index(list(component_costs[component]['Materialien'].keys())[i]) + 1)
+                    if material:
+                        with col2:
+                            amount = st.number_input('Menge (m)', min_value=0.0, 
+                                                     value=component_costs[component]['Materialien'].get(material, {}).get('amount', 0.0), 
+                                                     step=0.5, key=f'{outfit["id"]}_{component}_material_amount_{i}')
+                        with col3:
+                            material_data = materials_db[materials_db['material'] == material].iloc[0]
+                            material_price = float(material_data['average_price'])
+                            material_waste = float(material_data['waste_percentage']) / 100
+                            material_cost = amount * material_price * (1 + material_waste)
+                            st.markdown(f'<div style="text-align: right;">{material_cost:.2f} €</div>', unsafe_allow_html=True)
+                        new_materials[material] = {'amount': amount, 'cost': material_cost}
+                    with col4:
+                        if st.button('X', key=f'{outfit["id"]}_{component}_remove_material_{i}'):
+                            st.session_state[f'{outfit["id"]}_{component}_material_count'] = material_count - 1
+                            st.rerun()
+                component_costs[component]['Materialien'] = new_materials
+                if st.button('Material hinzufügen', key=f'{outfit["id"]}_{component}_add_material'):
+                    st.session_state[f'{outfit["id"]}_{component}_material_count'] = material_count + 1
+                    st.rerun()
+
+            with accessory_tab:
+                accessory_count = st.session_state.get(f'{outfit["id"]}_{component}_accessory_count', len(component_costs[component]['Zubehör']))
+                new_accessories = {}
+                for i in range(accessory_count):
+                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                    with col1:
+                        accessory = st.selectbox('Zubehör', options=[''] + accessories_db['accessory'].tolist(), 
+                                                 key=f'{outfit["id"]}_{component}_accessory_{i}',
+                                                 index=0 if i >= len(component_costs[component]['Zubehör']) else 
+                                                      accessories_db['accessory'].tolist().index(list(component_costs[component]['Zubehör'].keys())[i]) + 1)
+                    if accessory:
+                        with col2:
+                            amount = st.number_input('Menge', min_value=0, 
+                                                     value=int(component_costs[component]['Zubehör'].get(accessory, {}).get('amount', 0)), 
+                                                     step=1, key=f'{outfit["id"]}_{component}_accessory_amount_{i}')
+                        with col3:
+                            accessory_data = accessories_db[accessories_db['accessory'] == accessory].iloc[0]
+                            accessory_price = float(accessory_data['price'])
+                            accessory_cost = amount * accessory_price
+                            st.markdown(f'<div style="text-align: right;">{accessory_cost:.2f} €</div>', unsafe_allow_html=True)
+                        new_accessories[accessory] = {'amount': amount, 'cost': accessory_cost}
+                    with col4:
+                        if st.button('X', key=f'{outfit["id"]}_{component}_remove_accessory_{i}'):
+                            st.session_state[f'{outfit["id"]}_{component}_accessory_count'] = accessory_count - 1
+                            st.rerun()
+                component_costs[component]['Zubehör'] = new_accessories
+                if st.button('Zubehör hinzufügen', key=f'{outfit["id"]}_{component}_add_accessory'):
+                    st.session_state[f'{outfit["id"]}_{component}_accessory_count'] = accessory_count + 1
+                    st.rerun()
+
+    if st.button('Änderungen speichern', key=f"save_changes_{outfit['id']}"):
+        updated_outfit = {
+            'id': int(outfit['id']),
+            'name': new_name,
+            'components': json.dumps(selected_components),
+            'materials': json.dumps({c: component_costs[c]['Materialien'] for c in selected_components}),
+            'accessories': json.dumps({c: component_costs[c]['Zubehör'] for c in selected_components}),
+            'work_hours': json.dumps({c: component_costs[c]['Arbeitskosten'] / hourly_rate for c in selected_components}),
+            'category': new_category
+        }
+        try:
+            supabase_manager.client.table('saved_outfits').update(updated_outfit).eq('id', int(outfit['id'])).execute()
+            st.success(f"Outfit '{new_name}' wurde erfolgreich aktualisiert!")
+            del st.session_state.editing_outfit
+            st.rerun()
+        except Exception as e:
+            st.error(f"Fehler beim Aktualisieren des Outfits: {e}")
+            st.error(f"Problematische Daten: {updated_outfit}")
+
+    if st.button('Abbrechen', key=f"cancel_edit_{outfit['id']}"):
+        del st.session_state.editing_outfit
+        st.rerun()
+
+    # Zeigen Sie eine Zusammenfassung der aktuellen Kosten an
+    st.subheader("Aktuelle Kostenübersicht")
+    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = OutfitCalculator.calculate_costs(
+        selected_components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_hours * hourly_rate, profit_margin
+    )
+    UIManager.display_cost_overview(cost_data)
 
 
 
@@ -861,7 +1030,7 @@ def main():
 
         for component in components:
             with st.expander(f'{component} Details', expanded=True):
-                
+
                 # Arbeitszeit-Eingabe für jede Komponente
                 work_hours = st.number_input(f'Arbeitsstunden für {component}', min_value=0.0, step=0.5, key=f'{component}_work_hours')
                 labor_cost = work_hours * hourly_rate
@@ -1125,6 +1294,10 @@ def main():
         st.subheader('Gespeicherte Outfits')
         display_saved_outfits(supabase_manager, ui_manager, hourly_rate, overhead_costs, 
                               materials_db, accessories_db, profit_margin, consultation_hours)
+        
+        if 'editing_outfit' in st.session_state:
+            edit_outfit(supabase_manager, st.session_state.editing_outfit, materials_db, accessories_db, 
+                        hourly_rate, overhead_costs, profit_margin, consultation_hours)
 
     with tab5:
         st.subheader('Analysen')

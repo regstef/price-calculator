@@ -151,6 +151,41 @@ def generate_csv_download():
         mime="text/csv"
     )
 
+def analyze_outfits():
+    # Laden Sie die Daten aus der Datenbank
+    saved_outfits = load_data('saved_outfits')
+    
+    if saved_outfits.empty:
+        st.write("Keine Daten verfügbar.")
+        return
+
+    # Berechnen Sie die totalen Materialkosten
+    saved_outfits['total_material_cost'] = saved_outfits['material_costs'] + saved_outfits['accessory_costs']
+    
+    # Gruppieren nach Kategorie und berechnen Sie die Durchschnittswerte
+    analysis = saved_outfits.groupby('category').agg({
+        'total_material_cost': 'mean',
+        'work_hours': lambda x: pd.Series([sum(json.loads(hours).values()) for hours in x]).mean()
+    }).reset_index()
+
+    # Umbenennen der Spalten für Klarheit
+    analysis.columns = ['Kategorie', 'Durchschnittliche Materialkosten (€)', 'Durchschnittliche Arbeitsstunden']
+
+    # Anzeigen der Analyse
+    st.subheader("Analyse der Outfits nach Kategorie")
+    st.table(analysis)
+
+    # Anzeigen der detaillierten Einträge für jede Kategorie
+    for category in saved_outfits['category'].unique():
+        st.subheader(f"Details für Kategorie: {category}")
+        
+        # Filtern der Einträge nach Kategorie
+        category_entries = saved_outfits[saved_outfits['category'] == category][['name', 'total_material_cost', 'work_hours']]
+        
+        # Konvertieren der Arbeitsstunden aus JSON
+        category_entries['work_hours'] = category_entries['work_hours'].apply(lambda hours: sum(json.loads(hours).values()))
+        
+        st.table(category_entries)
 
 def create_cost_overview(components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin):
     if not components:
@@ -298,6 +333,8 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
     if saved_outfits.empty:
         st.write("Keine Outfits gespeichert.")
     else:
+        outfits_to_update = []  # Liste, um die Outfits zu speichern, die aktualisiert werden sollen
+
         for index, outfit in saved_outfits.iterrows():
             with st.expander(f"{outfit['name']} (ID: {outfit['id']})"):
                 try:
@@ -342,35 +379,25 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                     df = pd.DataFrame(cost_data)
                     st.table(df)
 
-                    # Detaillierte Materialien und Zubehör Auflistung
-                    st.subheader("Materialien und Zubehör")
-                    for component, items in materials.items():
-                        st.write(f"{component} - Materialien:")
-                        for material, data in items.items():
-                            st.write(f"- {material}: {data['amount']} m, Kosten: {format_currency(data['cost'])}")
-                    
-                    for component, items in accessories.items():
-                        st.write(f"{component} - Zubehör:")
-                        for accessory, data in items.items():
-                            st.write(f"- {accessory}: {data['amount']} Stück, Kosten: {format_currency(data['cost'])}")
-
-                    # Arbeitsstunden
-                    st.subheader("Arbeitsstunden")
-                    for component, hours in work_hours.items():
-                        st.write(f"{component}: {hours} Stunden")
-
-                    # Erstelle das Kuchendiagramm
-                    st.subheader("Kostenverteilung")
-                    costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, consultation_costs]
-                    labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
-                    create_pie_chart(costs, labels)
-
-                    if st.button('Outfit aktualisieren', key=f"update_{outfit['id']}"):
-                        update_outfit(outfit['id'], components, materials, accessories, work_hours,
-                                      current_hourly_rate, current_overhead_costs, consultation_costs,
-                                      total_material_cost, total_accessory_cost, total_labor_cost,
-                                      total_cost, current_profit_margin, profit_amount, final_price, category)
-                        st.success(f"Outfit '{outfit['name']}' wurde aktualisiert.")
+                    # Speichern der aktualisierten Details für die Massenaktualisierung
+                    outfits_to_update.append({
+                        'id': outfit['id'],
+                        'components': components,
+                        'materials': materials,
+                        'accessories': accessories,
+                        'work_hours': work_hours,
+                        'hourly_rate': current_hourly_rate,
+                        'overhead_costs': current_overhead_costs,
+                        'consultation_costs': consultation_costs,
+                        'material_costs': total_material_cost,
+                        'accessory_costs': total_accessory_cost,
+                        'labor_costs': total_labor_cost,
+                        'total_cost': total_cost,
+                        'profit_margin': current_profit_margin,
+                        'profit_amount': profit_amount,
+                        'final_price': final_price,
+                        'category': category
+                    })
 
                 except Exception as e:
                     st.error(f"Fehler beim Laden des Outfits: {str(e)}")
@@ -378,6 +405,29 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                 if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
                     delete_outfit(outfit['id'])
                     st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
+
+        # Button zur Massenaktualisierung
+        if st.button('Alle Outfits aktualisieren'):
+            for outfit in outfits_to_update:
+                update_outfit(
+                    outfit['id'],
+                    outfit['components'],
+                    outfit['materials'],
+                    outfit['accessories'],
+                    outfit['work_hours'],
+                    outfit['hourly_rate'],
+                    outfit['overhead_costs'],
+                    outfit['consultation_costs'],
+                    outfit['material_costs'],
+                    outfit['accessory_costs'],
+                    outfit['labor_costs'],
+                    outfit['total_cost'],
+                    outfit['profit_margin'],
+                    outfit['profit_amount'],
+                    outfit['final_price'],
+                    outfit['category']
+                )
+            st.success("Alle Outfits wurden erfolgreich aktualisiert.")
 
 
 
@@ -407,7 +457,8 @@ accessories_db = load_data('accessories')
 
 st.title('Outfit-Preis-Kalkulator')
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Kalkulator", "Materialien verwalten", "Zubehör verwalten", "Gespeicherte Outfits", "Hilfe"])
+# Bestehende Tabs
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Kalkulator", "Materialien verwalten", "Zubehör verwalten", "Gespeicherte Outfits", "Analysen", "Hilfe"])
 
 with tab1:
     col1, col2 = st.columns(2)
@@ -614,8 +665,11 @@ with tab4:
     if st.button('Formatierte CSV erstellen'):
         generate_csv_download()
 
-
+# Neue Analyse-Tab
 with tab5:
+    analyze_outfits()
+
+with tab6:
     st.subheader('Hilfe')
     st.write("""
     Willkommen beim Outfit-Preis-Kalkulator!

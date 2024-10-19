@@ -3,7 +3,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from supabase import create_client, Client
 import json
+import csv
 import os
+import io
 import shutil
 from datetime import datetime
 
@@ -36,7 +38,7 @@ def save_data(data, table_name):
     else:
         st.error(f'Fehler beim Aktualisieren der Daten in {table_name}.')
 
-def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, total_cost, profit_margin):
+def save_outfit(name, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price):
     supabase.table('saved_outfits').insert({
         'name': name,
         'components': json.dumps(components),
@@ -45,9 +47,33 @@ def save_outfit(name, components, materials, accessories, work_hours, hourly_rat
         'work_hours': json.dumps(work_hours),
         'hourly_rate': hourly_rate,
         'overhead_costs': overhead_costs,
+        'consultation_costs': consultation_costs,
+        'material_costs': material_costs,
+        'accessory_costs': accessory_costs,
+        'labor_costs': labor_costs,
         'total_cost': total_cost,
-        'profit_margin': profit_margin
+        'profit_margin': profit_margin,
+        'profit_amount': profit_amount,
+        'final_price': final_price
     }).execute()
+
+def update_outfit(outfit_id, components, materials, accessories, work_hours, hourly_rate, overhead_costs, consultation_costs, material_costs, accessory_costs, labor_costs, total_cost, profit_margin, profit_amount, final_price):
+    supabase.table('saved_outfits').update({
+        'components': json.dumps(components),
+        'materials': json.dumps(materials),
+        'accessories': json.dumps(accessories),
+        'work_hours': json.dumps(work_hours),
+        'hourly_rate': hourly_rate,
+        'overhead_costs': overhead_costs,
+        'consultation_costs': consultation_costs,
+        'material_costs': material_costs,
+        'accessory_costs': accessory_costs,
+        'labor_costs': labor_costs,
+        'total_cost': total_cost,
+        'profit_margin': profit_margin,
+        'profit_amount': profit_amount,
+        'final_price': final_price
+    }).eq('id', outfit_id).execute()
 
 def delete_outfit(id):
     supabase.table('saved_outfits').delete().eq('id', id).execute()
@@ -62,6 +88,67 @@ def delete_accessory(accessory_name):
 
 def format_currency(value):
     return f"{value:.2f} €"
+
+def get_saved_outfits_from_database():
+    try:
+        # Abrufen der Daten aus der 'saved_outfits'-Tabelle
+        response = supabase.table('saved_outfits').select("*").execute()
+        if response.data is None:
+            st.error("Fehler beim Abrufen der gespeicherten Outfits.")
+            return []
+        return response.data
+    except Exception as e:
+        st.error(f"Ein Fehler ist aufgetreten: {str(e)}")
+        return []
+
+def format_decimal(value):
+    """Format a float value to a string with a comma as a decimal separator."""
+    if isinstance(value, float):
+        return f"{value:.2f}".replace('.', ',')
+    return value
+
+def serialize_json_data(data):
+    """Serialize JSON data and format numbers with comma as decimal separator."""
+    try:
+        parsed = json.loads(data)
+        formatted = json.dumps(parsed, ensure_ascii=False, separators=(',', ':'))
+        return formatted
+    except (json.JSONDecodeError, TypeError):
+        return data
+
+def create_formatted_csv(saved_outfits):
+    # Convert the data to a pandas DataFrame
+    df = pd.DataFrame(saved_outfits)
+
+    # Apply formatting to all columns
+    for column in df.columns:
+        if df[column].dtype == float:
+            df[column] = df[column].apply(format_decimal)
+        elif df[column].dtype == object:
+            df[column] = df[column].apply(serialize_json_data)
+
+    # Create a string buffer
+    buffer = io.StringIO()
+
+    # Write the DataFrame to the buffer as a CSV
+    df.to_csv(buffer, index=False, encoding='utf-8', quoting=csv.QUOTE_NONNUMERIC, sep=';')
+
+    # Get the string value and return it
+    return buffer.getvalue()
+
+# In Ihrer Streamlit-App
+def generate_csv_download():
+    saved_outfits = get_saved_outfits_from_database()  # Implementieren Sie diese Funktion
+    csv_string = create_formatted_csv(saved_outfits)
+    
+    # Bieten Sie die CSV zum Download an
+    st.download_button(
+        label="CSV herunterladen",
+        data=csv_string,
+        file_name="formatted_outfits.csv",
+        mime="text/csv"
+    )
+
 
 def create_cost_overview(components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin):
     if not components:
@@ -204,7 +291,7 @@ def backup_database():
     shutil.copy2('outfit_calculator.db', backup_filename)
     st.success(f'Datenbank-Backup erstellt: {backup_filename}')
 
-def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db, current_profit_margin):
+def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db, current_profit_margin, consultation_hours=2.0):
     saved_outfits = load_data('saved_outfits')
     if saved_outfits.empty:
         st.write("Keine Outfits gespeichert.")
@@ -217,36 +304,71 @@ def display_saved_outfits(current_hourly_rate, current_overhead_costs, current_m
                     accessories = json.loads(outfit['accessories'])
                     work_hours = json.loads(outfit['work_hours'])
                     
-                    component_costs = {
-                        component: {
-                            'Materialien': materials.get(component, {}),
-                            'Zubehör': accessories.get(component, {}),
-                            'Arbeitskosten': work_hours.get(component, 0) * current_hourly_rate
-                        } for component in components
-                    }
+                    # Berechne die Kosten
+                    total_material_cost = sum(sum(item['cost'] for item in component.values()) for component in materials.values())
+                    total_accessory_cost = sum(sum(item['cost'] for item in component.values()) for component in accessories.values())
+                    total_labor_cost = sum(hours * current_hourly_rate for hours in work_hours.values())
+                    consultation_costs = consultation_hours * current_hourly_rate
                     
-                    cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = create_cost_overview(
-                        components, component_costs, current_materials_db, current_accessories_db,
-                        current_hourly_rate, current_overhead_costs, outfit['hourly_rate'] * 2,
-                        current_profit_margin
-                    )
+                    total_cost = total_material_cost + total_accessory_cost + total_labor_cost + current_overhead_costs + consultation_costs
+                    profit_amount = total_cost * (current_profit_margin / 100)
+                    final_price = total_cost + profit_amount
+
+                    # Erstelle die Kostenübersicht
+                    cost_data = [
+                        {'Kategorie': 'Name', 'Wert': outfit['name']},
+                        {'Kategorie': 'Komponenten', 'Wert': ', '.join(components)},
+                        {'Kategorie': 'Materialkosten', 'Wert': format_currency(total_material_cost)},
+                        {'Kategorie': 'Zubehörkosten', 'Wert': format_currency(total_accessory_cost)},
+                        {'Kategorie': 'Arbeitskosten', 'Wert': format_currency(total_labor_cost)},
+                        {'Kategorie': 'Stundensatz', 'Wert': format_currency(current_hourly_rate)},
+                        {'Kategorie': 'Gemeinkosten', 'Wert': format_currency(current_overhead_costs)},
+                        {'Kategorie': 'Gesamtproduktionskosten', 'Wert': format_currency(total_cost)},
+                        {'Kategorie': 'Beratungskosten', 'Wert': format_currency(consultation_costs)},
+                        {'Kategorie': f'Gewinnbetrag ({current_profit_margin}%)', 'Wert': format_currency(profit_amount)},
+                        {'Kategorie': 'Empfohlener Verkaufspreis', 'Wert': format_currency(final_price)}
+                    ]
+
+                    df = pd.DataFrame(cost_data)
+                    st.table(df)
+
+                    # Detaillierte Materialien und Zubehör Auflistung
+                    st.subheader("Materialien und Zubehör")
+                    for component, items in materials.items():
+                        st.write(f"{component} - Materialien:")
+                        for material, data in items.items():
+                            st.write(f"- {material}: {data['amount']} m, Kosten: {format_currency(data['cost'])}")
                     
-                    if cost_data:
-                        df = pd.DataFrame(cost_data)
-                        st.table(df)
-                        
-                        costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, outfit['hourly_rate'] * 2]
-                        labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
-                        create_pie_chart(costs, labels)
-                    else:
-                        st.warning("Keine Kostendaten für dieses Outfit verfügbar.")
-                    
+                    for component, items in accessories.items():
+                        st.write(f"{component} - Zubehör:")
+                        for accessory, data in items.items():
+                            st.write(f"- {accessory}: {data['amount']} Stück, Kosten: {format_currency(data['cost'])}")
+
+                    # Arbeitsstunden
+                    st.subheader("Arbeitsstunden")
+                    for component, hours in work_hours.items():
+                        st.write(f"{component}: {hours} Stunden")
+
+                    # Erstelle das Kuchendiagramm
+                    st.subheader("Kostenverteilung")
+                    costs = [total_material_cost, total_accessory_cost, total_labor_cost, current_overhead_costs, consultation_costs]
+                    labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
+                    create_pie_chart(costs, labels)
+
+                    if st.button('Outfit aktualisieren', key=f"update_{outfit['id']}"):
+                        update_outfit(outfit['id'], components, materials, accessories, work_hours,
+                                      current_hourly_rate, current_overhead_costs, consultation_costs,
+                                      total_material_cost, total_accessory_cost, total_labor_cost,
+                                      total_cost, current_profit_margin, profit_amount, final_price)
+                        st.success(f"Outfit '{outfit['name']}' wurde aktualisiert.")
+
                 except Exception as e:
                     st.error(f"Fehler beim Laden des Outfits: {str(e)}")
                 
                 if st.button('Outfit löschen', key=f"delete_{outfit['id']}"):
                     delete_outfit(outfit['id'])
                     st.success(f"Outfit '{outfit['name']}' wurde gelöscht. Bitte laden Sie die Seite neu, um die Änderungen zu sehen.")
+
 
 def add_material(material_name, average_price, waste_percentage):
     try:
@@ -411,7 +533,9 @@ with tab1:
                     {c: outfit_components[c]['materials'] for c in components},
                     {c: outfit_components[c]['accessories'] for c in components},
                     {c: outfit_components[c]['work_hours'] for c in components},
-                    hourly_rate, overhead_costs, total_cost, profit_margin)
+                    hourly_rate, overhead_costs, consultation_costs,
+                    total_material_cost, total_accessory_cost, total_labor_cost,
+                    total_cost, profit_margin, profit_amount, final_price)
         st.success(f'Outfit "{outfit_name}" erfolgreich gespeichert!')
 
 with tab2:
@@ -466,13 +590,17 @@ with tab3:
             if st.button('Löschen', key=f"delete_accessory_{index}"):
                 delete_accessory(row['accessory'])
                 st.experimental_rerun()
-        if new_price != row['price']:
-            accessories_db.at[index, 'price'] = new_price
-            update_data(accessories_db, 'accessories')
+                if new_price != row['price']:
+                    accessories_db.at[index, 'price'] = new_price
+                    update_data(accessories_db, 'accessories')
 
 with tab4:
     st.subheader('Gespeicherte Outfits')
-    display_saved_outfits(hourly_rate, overhead_costs, materials_db, accessories_db, profit_margin)
+    display_saved_outfits(hourly_rate, overhead_costs, materials_db, accessories_db, profit_margin, consultation_hours)
+    # Fügen Sie einen Button in Ihrer App hinzu, um den CSV-Download zu starten
+    if st.button('Formatierte CSV erstellen'):
+        generate_csv_download()
+
 
 with tab5:
     st.subheader('Hilfe')
@@ -504,3 +632,4 @@ with tab5:
 
     Bei Fragen oder Problemen wenden Sie sich bitte an den Support.
     """)
+

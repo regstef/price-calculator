@@ -383,7 +383,7 @@ def add_accessory(supabase_manager: SupabaseManager, accessory_name: str, price:
         logger.error(f"Fehler beim Hinzufügen des Zubehörs: {e}")
         st.error(f"Fehler beim Hinzufügen des Zubehörs: {e}")
 
-def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManager, current_hourly_rate: float, current_overhead_costs: float, current_materials_db: pd.DataFrame, current_accessories_db: pd.DataFrame, current_profit_margin: float, consultation_hours: float = 2.0) -> None:
+def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManager, current_hourly_rate: float, current_overhead_costs: float, current_materials_db: pd.DataFrame, current_accessories_db: pd.DataFrame, current_profit_margin: float, consultation_hours: float) -> None:
     """
     Zeigt die gespeicherten Outfits an und ermöglicht deren Verwaltung.
     """
@@ -401,13 +401,34 @@ def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManag
         if category_filter:
             filtered_outfits = filtered_outfits[filtered_outfits['category'].isin(category_filter)]
         
-        st.table(filtered_outfits[['name', 'category', 'final_price']])
+        # Erstellen einer Liste für die aktualisierten Werte
+        updated_outfits_list = []
+        
+        for _, outfit in filtered_outfits.iterrows():
+            # Berechnen Sie hier die aktualisierten Werte für jedes Outfit
+            updated_price = calculate_updated_price(outfit, current_hourly_rate, current_overhead_costs, 
+                                                    current_materials_db, current_accessories_db, 
+                                                    current_profit_margin, consultation_hours)
+            
+            updated_outfits_list.append({
+                'name': outfit['name'],
+                'category': outfit['category'],
+                'final_price': updated_price
+            })
+        
+        # Erstellen der DataFrame aus der Liste
+        updated_outfits = pd.DataFrame(updated_outfits_list)
+        
+        # Anzeigen der aktualisierten Tabelle
+        st.table(updated_outfits)
         
         selected_outfit = st.selectbox("Outfit-Details anzeigen", options=filtered_outfits['name'])
         if selected_outfit:
             outfit = filtered_outfits[filtered_outfits['name'] == selected_outfit].iloc[0]
             with st.expander(f"Details für {selected_outfit}", expanded=True):
-                display_outfit_details(supabase_manager, outfit, current_hourly_rate, current_overhead_costs, current_materials_db, current_accessories_db, current_profit_margin, consultation_hours)
+                display_outfit_details(supabase_manager, outfit, current_hourly_rate, current_overhead_costs, 
+                                       current_materials_db, current_accessories_db, current_profit_margin, 
+                                       consultation_hours)
             
             if st.button(f"Outfit '{selected_outfit}' bearbeiten"):
                 st.session_state.editing_outfit = outfit
@@ -429,6 +450,50 @@ def display_saved_outfits(supabase_manager: SupabaseManager, ui_manager: UIManag
         with col2:
             if st.button('CSV erstellen'):
                 generate_csv_download(saved_outfits)
+
+
+def calculate_updated_price(outfit: pd.Series, current_hourly_rate: float, current_overhead_costs: float, 
+                            current_materials_db: pd.DataFrame, current_accessories_db: pd.DataFrame, 
+                            current_profit_margin: float, consultation_hours: float) -> float:
+    """
+    Berechnet den aktualisierten Preis für ein Outfit basierend auf den aktuellen Werten.
+    """
+    components = json.loads(outfit['components'])
+    materials = json.loads(outfit['materials'])
+    accessories = json.loads(outfit['accessories'])
+    work_hours = json.loads(outfit['work_hours'])
+    
+    total_material_cost = 0
+    total_accessory_cost = 0
+    
+    for component in components:
+        # Materialkosten berechnen
+        for material, data in materials.get(component, {}).items():
+            material_data = current_materials_db[current_materials_db['material'] == material]
+            if not material_data.empty:
+                material_price = float(material_data['average_price'].iloc[0])
+                material_waste = float(material_data['waste_percentage'].iloc[0]) / 100
+                amount = data['amount']
+                cost = amount * material_price * (1 + material_waste)
+                total_material_cost += cost
+        
+        # Zubehörkosten berechnen
+        for accessory, data in accessories.get(component, {}).items():
+            accessory_data = current_accessories_db[current_accessories_db['accessory'] == accessory]
+            if not accessory_data.empty:
+                accessory_price = float(accessory_data['price'].iloc[0])
+                amount = data['amount']
+                cost = amount * accessory_price
+                total_accessory_cost += cost
+    
+    total_labor_cost = sum(float(hours) * current_hourly_rate for hours in work_hours.values())
+    consultation_costs = consultation_hours * current_hourly_rate
+    
+    total_cost = total_material_cost + total_accessory_cost + total_labor_cost + current_overhead_costs + consultation_costs
+    profit_amount = total_cost * (current_profit_margin / 100)
+    final_price = total_cost + profit_amount
+    
+    return final_price
 
 def display_outfit_details(supabase_manager: SupabaseManager, outfit: pd.Series, current_hourly_rate: float, current_overhead_costs: float, current_materials_db: pd.DataFrame, current_accessories_db: pd.DataFrame, current_profit_margin: float, consultation_hours: float) -> None:
     """
@@ -696,34 +761,72 @@ def serialize_json_data(data: Any) -> str:
     except (json.JSONDecodeError, TypeError):
         return str(data)
 
-def analyze_outfits(saved_outfits: pd.DataFrame) -> None:
+def analyze_outfits(saved_outfits: pd.DataFrame, current_materials_db: pd.DataFrame, current_accessories_db: pd.DataFrame) -> None:
     """
     Analysiert die gespeicherten Outfits und zeigt Statistiken an.
     
     Args:
         saved_outfits (pd.DataFrame): DataFrame mit allen gespeicherten Outfits.
+        current_materials_db (pd.DataFrame): Aktuelle Materialdatenbank.
+        current_accessories_db (pd.DataFrame): Aktuelle Zubehördatenbank.
     """
     if saved_outfits.empty:
         st.write("Keine Daten verfügbar.")
         return
 
-    saved_outfits['total_material_cost'] = saved_outfits['material_costs'] + saved_outfits['accessory_costs']
+    def calculate_material_and_accessory_costs(row):
+        materials = json.loads(row['materials'])
+        accessories = json.loads(row['accessories'])
+        
+        total_material_cost = 0
+        total_accessory_cost = 0
+        
+        for component, component_materials in materials.items():
+            for material, data in component_materials.items():
+                material_data = current_materials_db[current_materials_db['material'] == material]
+                if not material_data.empty:
+                    material_price = float(material_data['average_price'].iloc[0])
+                    material_waste = float(material_data['waste_percentage'].iloc[0]) / 100
+                    amount = data['amount']
+                    cost = amount * material_price * (1 + material_waste)
+                    total_material_cost += cost
+
+        for component, component_accessories in accessories.items():
+            for accessory, data in component_accessories.items():
+                accessory_data = current_accessories_db[current_accessories_db['accessory'] == accessory]
+                if not accessory_data.empty:
+                    accessory_price = float(accessory_data['price'].iloc[0])
+                    amount = data['amount']
+                    cost = amount * accessory_price
+                    total_accessory_cost += cost
+
+        return pd.Series({
+            'total_material_cost': total_material_cost,
+            'total_accessory_cost': total_accessory_cost
+        })
+
+    # Berechne Material- und Zubehörkosten
+    cost_data = saved_outfits.apply(calculate_material_and_accessory_costs, axis=1)
+    saved_outfits = pd.concat([saved_outfits, cost_data], axis=1)
+
+    saved_outfits['total_cost'] = saved_outfits['total_material_cost'] + saved_outfits['total_accessory_cost']
     
     analysis = saved_outfits.groupby('category').agg({
-        'total_material_cost': 'mean',
+        'total_cost': 'mean',
         'work_hours': lambda x: pd.Series([sum(json.loads(hours).values()) for hours in x]).mean()
     }).reset_index()
 
-    analysis.columns = ['Kategorie', 'Durchschnittliche Materialkosten (€)', 'Durchschnittliche Arbeitsstunden']
+    analysis.columns = ['Kategorie', 'Durchschnittliche Gesamtkosten (€)', 'Durchschnittliche Arbeitsstunden']
 
     st.subheader("Analyse der Outfits nach Kategorie")
     st.table(analysis)
 
     for category in saved_outfits['category'].unique():
         with st.expander(f"Details für Kategorie: {category}"):
-            category_entries = saved_outfits[saved_outfits['category'] == category][['name', 'total_material_cost', 'work_hours']]
+            category_entries = saved_outfits[saved_outfits['category'] == category][['name', 'total_cost', 'work_hours']]
             category_entries['work_hours'] = category_entries['work_hours'].apply(lambda hours: sum(json.loads(hours).values()))
             st.table(category_entries)
+
 
 def main():
     st.set_page_config(page_title="Outfit-Preis-Kalkulator  ")
@@ -758,7 +861,13 @@ def main():
 
         for component in components:
             with st.expander(f'{component} Details', expanded=True):
-                material_tab, accessory_tab, cost_breakdown_tab = st.tabs(["Materialien", "Zubehör", "Kostenaufschlüsselung"])
+                
+                # Arbeitszeit-Eingabe für jede Komponente
+                work_hours = st.number_input(f'Arbeitsstunden für {component}', min_value=0.0, step=0.5, key=f'{component}_work_hours')
+                labor_cost = work_hours * hourly_rate
+                component_costs[component]['Arbeitskosten'] = labor_cost
+                
+                material_tab, accessory_tab = st.tabs(["Materialien", "Zubehör"])
                 
                 with material_tab:
                     material_count = st.session_state.get(f'{component}_material_count', 1)
@@ -767,7 +876,7 @@ def main():
                         with col1:
                             material = st.selectbox('Material', options=[''] + materials_db['material'].tolist(), key=f'{component}_material_{i}')
                         with col2:
-                            amount = st.number_input('Menge (m)', min_value=0.0, key=f'{component}_material_amount_{i}', step=0.1)
+                            amount = st.number_input('Menge (m)', min_value=0.0, key=f'{component}_material_amount_{i}', step=0.5)
                         with col3:
                             if material:
                                 material_data = materials_db[materials_db['material'] == material].iloc[0]
@@ -815,30 +924,114 @@ def main():
                         st.session_state[f'{component}_accessory_count'] = accessory_count + 1
                         st.rerun()
 
-                with cost_breakdown_tab:
-                    st.subheader('Kostenaufschlüsselung')
-                    st.write('Materialien:')
-                    for material, data in component_costs[component]['Materialien'].items():
-                        st.write(f'- {material}: {data["cost"]:.2f} €')
-                    st.write('Zubehör:')
-                    for accessory, data in component_costs[component]['Zubehör'].items():
-                        st.write(f'- {accessory}: {data["cost"]:.2f} €')
-                    work_hours = st.number_input(f'Arbeitsstunden für {component}', min_value=0.0, step=0.5, key=f'{component}_work_hours')
-                    labor_cost = work_hours * hourly_rate
-                    component_costs[component]['Arbeitskosten'] = labor_cost
-                    st.write(f'Arbeitskosten: {labor_cost:.2f} €')
-                    component_total = sum(data["cost"] for data in component_costs[component]['Materialien'].values()) + \
-                                      sum(data["cost"] for data in component_costs[component]['Zubehör'].values()) + \
-                                      component_costs[component]['Arbeitskosten']
-                    st.write(f'Gesamtkosten für {component}: {component_total:.2f} €')
-
         st.divider()
         st.subheader('Gesamtübersicht')
         cost_data, total_material_cost, total_accessory_cost, total_labor_cost, total_cost, profit_amount, final_price = outfit_calculator.calculate_costs(
             components, component_costs, materials_db, accessories_db, hourly_rate, overhead_costs, consultation_costs, profit_margin
         )
 
-        ui_manager.display_cost_overview(cost_data)
+        # Erstellen der Gesamtübersichtstabelle im Stil von display_outfit_details
+        table_data = []
+        
+        # Allgemeine Informationen
+        table_data.append({"Beschreibung": "Gemeinkosten", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{overhead_costs:.2f} €"})
+        table_data.append({"Beschreibung": "Beratungsstunden", "Menge": f"{consultation_hours:.2f}", "Einzelpreis": f"{hourly_rate:.2f} €", "Gesamtpreis": f"{consultation_costs:.2f} €"})
+        
+        # Komponenten, Materialien, Zubehör und Arbeitsstunden
+        for component in components:
+            table_data.append({"Beschreibung": f"Komponente: {component}", "Menge": "---", "Einzelpreis": "---", "Gesamtpreis": "---"})
+            
+            component_total_cost = 0
+            
+            # Materialien
+            for material, data in component_costs[component]['Materialien'].items():
+                material_data = materials_db[materials_db['material'] == material].iloc[0]
+                material_price = float(material_data['average_price'])
+                material_waste = float(material_data['waste_percentage']) / 100
+                material_cost = data['cost']
+                component_total_cost += material_cost
+                table_data.append({
+                    "Beschreibung": f"Material: {material}",
+                    "Menge": f"{data['amount']:.2f} m",
+                    "Einzelpreis": f"{material_price:.2f} € (inkl. {material_waste*100:.1f}% Verschnitt)",
+                    "Gesamtpreis": f"{material_cost:.2f} €"
+                })
+            
+            # Zubehör
+            for accessory, data in component_costs[component]['Zubehör'].items():
+                accessory_data = accessories_db[accessories_db['accessory'] == accessory].iloc[0]
+                accessory_price = float(accessory_data['price'])
+                accessory_cost = data['cost']
+                component_total_cost += accessory_cost
+                table_data.append({
+                    "Beschreibung": f"Zubehör: {accessory}",
+                    "Menge": f"{data['amount']} Stück",
+                    "Einzelpreis": f"{accessory_price:.2f} €",
+                    "Gesamtpreis": f"{accessory_cost:.2f} €"
+                })
+            
+            # Arbeitsstunden
+            component_work_hours = component_costs[component]['Arbeitskosten'] / hourly_rate
+            component_labor_cost = component_costs[component]['Arbeitskosten']
+            component_total_cost += component_labor_cost
+            table_data.append({
+                "Beschreibung": f"Arbeitsstunden: {component}",
+                "Menge": f"{component_work_hours:.2f} h",
+                "Einzelpreis": f"{hourly_rate:.2f} €",
+                "Gesamtpreis": f"{component_labor_cost:.2f} €"
+            })
+            
+            # Gesamtkosten pro Komponente
+            table_data.append({
+                "Beschreibung": f"Gesamtkosten: {component}",
+                "Menge": "-",
+                "Einzelpreis": "-",
+                "Gesamtpreis": f"{component_total_cost:.2f} €"
+            })
+        
+        # Gesamtkosten
+        table_data.append({"Beschreibung": "Gesamtmaterialkosten", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{total_material_cost:.2f} €"})
+        table_data.append({"Beschreibung": "Gesamtzubehörkosten", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{total_accessory_cost:.2f} €"})
+        table_data.append({"Beschreibung": "Gesamtarbeitskosten", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{total_labor_cost:.2f} €"})
+        table_data.append({"Beschreibung": "Gesamtproduktionskosten", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{total_cost:.2f} €"})
+        table_data.append({"Beschreibung": f"Gewinnbetrag ({profit_margin}%)", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{profit_amount:.2f} €"})
+        table_data.append({"Beschreibung": "Empfohlener Verkaufspreis", "Menge": "-", "Einzelpreis": "-", "Gesamtpreis": f"{final_price:.2f} €"})
+
+        # Erstellen und Anzeigen der Tabelle
+        df = pd.DataFrame(table_data)
+
+        # Styling der Dataframe
+        def highlight_rows(row):
+            if row['Beschreibung'].startswith('Komponente:'):
+                return ['background-color: #FFF9C4; color: black;'] * len(row)
+            elif row['Beschreibung'].startswith('Gesamtkosten:'):
+                return ['background-color: #C8E6C9; color: black;'] * len(row)
+            elif row['Beschreibung'] == 'Empfohlener Verkaufspreis':
+                return ['background-color: #BBDEFB; color: black; font-weight: bold'] * len(row)
+            return [''] * len(row)
+
+        # Formatierung der Zahlen
+        df['Menge'] = df['Menge'].apply(lambda x: f"{x:,.2f}".replace(',', ' ').replace('.', ',') if isinstance(x, (int, float)) else x)
+        df['Einzelpreis'] = df['Einzelpreis'].apply(lambda x: f"{x:,.2f} €".replace(',', ' ').replace('.', ',') if isinstance(x, (int, float)) else x)
+        df['Gesamtpreis'] = df['Gesamtpreis'].apply(lambda x: f"{x:,.2f} €".replace(',', ' ').replace('.', ',') if isinstance(x, (int, float)) else x)
+
+        styled_df = df.style.apply(highlight_rows, axis=1)
+        styled_df = styled_df.set_properties(**{
+            'background-color': '#2B2B2B',
+            'color': 'white',
+            'border-color': 'white'
+        })
+        styled_df = styled_df.set_table_styles([
+            {'selector': 'th', 'props': [('background-color', '#1E1E1E'), ('color', 'white')]},
+            {'selector': 'td', 'props': [('text-align', 'right')]},
+            {'selector': 'td:first-child', 'props': [('text-align', 'left')]},
+        ])
+
+        # Anzeigen der Dataframe
+        st.markdown(
+            styled_df.to_html(),
+            unsafe_allow_html=True
+        )
 
         costs = [total_material_cost, total_accessory_cost, total_labor_cost, overhead_costs, consultation_costs]
         labels = ['Materialien', 'Zubehör', 'Arbeitskosten', 'Gemeinkosten', 'Beratung']
@@ -868,16 +1061,6 @@ def main():
                         'materials': json.dumps({c: outfit_components[c]['materials'] for c in components}),
                         'accessories': json.dumps({c: outfit_components[c]['accessories'] for c in components}),
                         'work_hours': json.dumps({c: outfit_components[c]['work_hours'] for c in components}),
-                        'hourly_rate': hourly_rate,
-                        'overhead_costs': overhead_costs,
-                        'consultation_costs': consultation_costs,
-                        'material_costs': total_material_cost,
-                        'accessory_costs': total_accessory_cost,
-                        'labor_costs': total_labor_cost,
-                        'total_cost': total_cost,
-                        'profit_margin': profit_margin,
-                        'profit_amount': profit_amount,
-                        'final_price': final_price,
                         'category': category
                     }
                     supabase_manager.save_outfit(outfit_data)
@@ -940,13 +1123,13 @@ def main():
 
     with tab4:
         st.subheader('Gespeicherte Outfits')
-        saved_outfits = supabase_manager.load_data('saved_outfits')
-        display_saved_outfits(supabase_manager, ui_manager, hourly_rate, overhead_costs, materials_db, accessories_db, profit_margin, consultation_hours)
+        display_saved_outfits(supabase_manager, ui_manager, hourly_rate, overhead_costs, 
+                              materials_db, accessories_db, profit_margin, consultation_hours)
 
     with tab5:
         st.subheader('Analysen')
         saved_outfits = supabase_manager.load_data('saved_outfits')
-        analyze_outfits(saved_outfits)
+        analyze_outfits(saved_outfits, materials_db, accessories_db)
 
     with tab6:
         st.subheader('Hilfe')

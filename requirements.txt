@@ -1,5 +1,6 @@
-   streamlit
-   pandas
-   matplotlib
-   supabase
-
+streamlit
+pandas
+matplotlib
+supabase
+python-dotenv
+numpy
